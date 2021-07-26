@@ -13,6 +13,7 @@
 #define _FILE_OFFSET_BITS	64
 #define __USE_FILE_OFFSET64
 #define _XOPEN_SOURCE 600
+#define _DEFAULT_SOURCE
 
 #include <blkid/blkid.h>
 #include <ctype.h>
@@ -29,6 +30,7 @@
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <uuid/uuid.h>
 
@@ -36,6 +38,7 @@
 #include "lib.h"
 #include "bitwise.h"
 #include "zoned.h"
+#include "nvmpg_format.h"
 
 struct sb_context {
 	unsigned int	block_size;
@@ -43,6 +46,7 @@ struct sb_context {
 	bool		writeback;
 	bool		discard;
 	bool		wipe_bcache;
+	bool		nvdimm_meta;
 	unsigned int	cache_replacement_policy;
 	uint64_t	data_offset;
 	uuid_t		set_uuid;
@@ -174,6 +178,7 @@ void usage(void)
 	fprintf(stderr,
 		   "Usage: make-bcache [options] device\n"
 	       "	-C, --cache		Format a cache device\n"
+	       "	-M, --mdev		Format a cache nvmdimm-meta device\n"
 	       "	-B, --bdev		Format a backing device\n"
 	       "	-b, --bucket		bucket size\n"
 	       "	-w, --block		block size (hard sector size of SSD, often 2k)\n"
@@ -250,6 +255,7 @@ static void write_sb(char *dev, struct sb_context *sbc, bool bdev, bool force)
 	bool wipe_bcache = sbc->wipe_bcache;
 	bool writeback = sbc->writeback;
 	bool discard = sbc->discard;
+	bool nvdimm_meta = sbc->nvdimm_meta;
 	char *label = sbc->label;
 	uint64_t data_offset = sbc->data_offset;
 	unsigned int cache_replacement_policy = sbc->cache_replacement_policy;
@@ -398,6 +404,9 @@ static void write_sb(char *dev, struct sb_context *sbc, bool bdev, bool force)
 		       data_offset);
 		putchar('\n');
 	} else {
+		if (nvdimm_meta)
+			bch_set_feature_nvdimm_meta(&sb);
+
 		set_bucket_size(&sb, bucket_size);
 
 		sb.nbuckets		= getblocks(fd) / sb.bucket_size;
@@ -473,6 +482,122 @@ static void write_sb(char *dev, struct sb_context *sbc, bool bdev, bool force)
 	close(fd);
 }
 
+static void write_nvm_namespace_sb(char *dev, int this_ns, int total_ns,
+				   struct sb_context *sbc, bool force)
+{
+	int fd;
+	struct bch_nvmpg_sb *nvm_sb = NULL;
+	struct bch_nvmpg_set_header *set_header = NULL;
+	struct bch_nvmpg_head *sys_head = NULL;
+	struct bch_nvmpg_recs *recs = NULL;
+	char uuid_str[40], nvm_pages_set_uuid_str[40];
+	int page_size = getpagesize();
+	void *start_addr = NULL;
+
+	fd = open(dev, O_RDWR|O_EXCL);
+	if (fd < 0) {
+		printf("open %s failed: %s\n", dev, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	start_addr = mmap(NULL, BCH_NVMPG_START, PROT_READ | PROT_WRITE,
+			  MAP_SHARED, fd, 0);
+	if (start_addr == MAP_FAILED) {
+		printf("mmap to %s filed: %s\n", dev, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	nvm_sb = (struct bch_nvmpg_sb *)(start_addr + BCH_NVMPG_SB_OFFSET);
+
+	if ((!memcmp(nvm_sb->magic, bch_nvmpg_magic, 16)) &&
+	    (!force)) {
+		fprintf(stderr, "Already a nvdimm meta device on %s,", dev);
+		fprintf(stderr, " overwrite with --force\n");
+		exit(EXIT_FAILURE);
+	}
+
+	set_header = (struct bch_nvmpg_set_header *)
+			(start_addr + BCH_NVMPG_RECLIST_HEAD_OFFSET);
+	memset(start_addr, 0, BCH_NVMPG_START);
+
+	/* Initialize super block, ns_id is 0 */
+	nvm_sb->sb_offset		= BCH_NVMPG_SB_OFFSET;
+	nvm_sb->version			= BCH_NVMPG_SB_VERSION;
+	memcpy(nvm_sb->magic,		bch_nvmpg_magic, 16);
+	uuid_generate(nvm_sb->uuid);
+	/* Right now there is only one namespace in the nvm_pages set */
+	uuid_generate(nvm_sb->set_uuid);
+	nvm_sb->page_size		= page_size;
+	nvm_sb->total_ns		= total_ns;
+	nvm_sb->this_ns			= this_ns;
+	nvm_sb->flags			= 0;
+	nvm_sb->seq			= 0;
+	nvm_sb->feature_compat		= 0;
+	nvm_sb->feature_incompat	= 0;
+	nvm_sb->feature_ro_compat	= 0;
+	nvm_sb->pages_offset		= BCH_NVMPG_START;
+	nvm_sb->pages_total		= getblocks(fd) * 512 / page_size;
+
+	if (this_ns == 0)
+		nvm_sb->set_header_offset = BCH_NVMPG_RECLIST_HEAD_OFFSET;
+	else
+		nvm_sb->set_header_offset = 0;
+
+	/* Set checksum, don't modify nvm_sb anymore */
+	nvm_sb->csum = csum_set(nvm_sb);
+
+	uuid_unparse(nvm_sb->uuid, uuid_str);
+	uuid_unparse(nvm_sb->set_uuid, nvm_pages_set_uuid_str);
+
+	printf("Name			%s\n", dev);
+	printf("Type			nvdimm-meta\n");
+	printf("UUID:			%s\n"
+	       "NVM Set UUID:		%s\n"
+	       "version:		%u\n"
+	       "seq:			%u\n"
+	       "total_ns:		%u\n"
+	       "this_ns:		%u\n"
+	       "ns_start:		N/A\n"
+	       "page_size:		%u\n"
+	       "pages_offset:		%llu\n"
+	       "pages_total:		%llu\n",
+	       uuid_str, nvm_pages_set_uuid_str,
+	       (unsigned int) nvm_sb->version,
+	       (unsigned int) nvm_sb->seq,
+	       nvm_sb->total_ns,
+	       nvm_sb->this_ns,
+	       nvm_sb->page_size,
+	       nvm_sb->pages_offset,
+	       nvm_sb->pages_total);
+
+	/* Initialize the very basic allocation list */
+	set_header->size = (sizeof(struct bch_nvmpg_set_header) -
+			    offsetof(struct bch_nvmpg_set_header, heads)) /
+				sizeof(struct bch_nvmpg_head);
+	set_header->used = 1;
+
+	sys_head = &set_header->heads[0];
+	memcpy(sys_head->uuid, nvm_sb->set_uuid, 16);
+	memccpy(sys_head->label, "nvmpg_sys_alloc", '\0', BCH_NVMPG_LBL_SIZE - 1);
+	sys_head->state = BCH_NVMPG_HD_STAT_ALLOC;
+	sys_head->flags = 0;
+	sys_head->recs_offset[0] = BCH_NVMPG_SYSRECS_OFFSET;
+
+	recs = (struct bch_nvmpg_recs *)
+		(start_addr + BCH_NVMPG_SYSRECS_OFFSET);
+	recs->head_offset = (unsigned long)sys_head - (unsigned long)start_addr;
+	recs->next_offset = 0;
+	memcpy(recs->magic, bch_nvmpg_recs_magic, 16);
+	memcpy(recs->uuid, sys_head->uuid, 16);
+	recs->size = BCH_NVMPG_MAX_RECS;
+	recs->used = 0;
+
+	msync(start_addr, BCH_NVMPG_START, MS_SYNC);
+	munmap(start_addr, BCH_NVMPG_START);
+
+	close(fd);
+}
+
 static unsigned int get_blocksize(const char *path)
 {
 	struct stat statbuf;
@@ -517,9 +642,13 @@ static unsigned int get_blocksize(const char *path)
 
 int make_bcache(int argc, char **argv)
 {
-	int c, bdev = -1;
-	unsigned int i, ncache_devices = 0, nbacking_devices = 0;
+	int c;
+	unsigned int i;
+	int cdev = -1, bdev = -1, mdev = -1;
+	unsigned int ncache_devices = 0, ncache_nvm_devices = 0;
+	unsigned int nbacking_devices = 0;
 	char *cache_devices[argc];
+	char *cache_nvm_devices[argc];
 	char *backing_devices[argc];
 	char label[SB_LABEL_SIZE] = { 0 };
 	unsigned int block_size = 0, bucket_size = 1024;
@@ -534,6 +663,7 @@ int make_bcache(int argc, char **argv)
 	struct option opts[] = {
 		{ "cache",		0, NULL,	'C' },
 		{ "bdev",		0, NULL,	'B' },
+		{ "nvdimm-meta",	0, NULL,	'M'},
 		{ "bucket",		1, NULL,	'b' },
 		{ "block",		1, NULL,	'w' },
 		{ "writeback",		0, &writeback,	1 },
@@ -550,15 +680,18 @@ int make_bcache(int argc, char **argv)
 		{ NULL,			0, NULL,	0 },
 	};
 
-	while ((c = getopt_long(argc, argv,
-				"-hCBUo:w:b:l:",
-				opts, NULL)) != -1)
+	while ((c = getopt_long(argc, argv, "-hCBMUo:w:b:l:",
+				opts, NULL)) != -1) {
+
 		switch (c) {
 		case 'C':
-			bdev = 0;
+			cdev = 1;
 			break;
 		case 'B':
 			bdev = 1;
+			break;
+		case 'M':
+			mdev = 1;
 			break;
 		case 'b':
 			bucket_size =
@@ -606,19 +739,28 @@ int make_bcache(int argc, char **argv)
 			usage();
 			break;
 		case 1:
-			if (bdev == -1) {
-				fprintf(stderr, "Please specify -C or -B\n");
+			if (cdev == -1 && bdev == -1 && mdev == -1) {
+				fprintf(stderr, "Please specify -C, -B or -M\n");
 				exit(EXIT_FAILURE);
 			}
 
-			if (bdev)
+			if (bdev > 0) {
 				backing_devices[nbacking_devices++] = optarg;
-			else
+				printf("backing_devices[%d]: %s\n", nbacking_devices - 1, optarg);
+				bdev = -1;
+			} else if (cdev > 0) {
 				cache_devices[ncache_devices++] = optarg;
+				printf("cache_devices[%d]: %s\n", ncache_devices - 1, optarg);
+				cdev = -1;
+			} else if (mdev > 0) {
+				cache_nvm_devices[ncache_nvm_devices++] = optarg;
+				mdev = -1;
+			}
 			break;
 		}
+	} /* while */
 
-	if (!ncache_devices && !nbacking_devices) {
+	if (!ncache_devices && !ncache_nvm_devices && !nbacking_devices) {
 		fprintf(stderr, "Please supply a device\n");
 		usage();
 	}
@@ -653,6 +795,7 @@ int make_bcache(int argc, char **argv)
 	sbc.data_offset = data_offset;
 	memcpy(sbc.set_uuid, set_uuid, sizeof(sbc.set_uuid));
 	sbc.label = label;
+	sbc.nvdimm_meta = (ncache_nvm_devices > 0) ? true : false;
 
 	for (i = 0; i < ncache_devices; i++)
 		write_sb(cache_devices[i], &sbc, false, force);
@@ -664,5 +807,10 @@ int make_bcache(int argc, char **argv)
 		write_sb(backing_devices[i], &sbc, true, force);
 	}
 
+	for (i = 0; i < ncache_nvm_devices; i++) {
+		write_nvm_namespace_sb(cache_nvm_devices[i], i,
+				       ncache_nvm_devices, &sbc,
+				       force);
+	}
 	return 0;
 }

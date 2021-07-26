@@ -19,6 +19,7 @@
 #include <assert.h>
 
 #include "features.h"
+#include "nvmpg_format.h"
 #include "show.h"
 
 #define BCACHE_TOOLS_VERSION	"1.1"
