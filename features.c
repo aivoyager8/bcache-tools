@@ -24,6 +24,8 @@ static struct feature feature_list[] = {
 		"obso_large_bucket"},
 	{BCH_FEATURE_INCOMPAT, BCH_FEATURE_INCOMPAT_LOG_LARGE_BUCKET_SIZE,
 		"large_bucket"},
+	{BCH_FEATURE_INCOMPAT, BCH_FEATURE_INCOMPAT_NVDIMM_META,
+		"nvdimm_meta"},
 	{0, 0, 0 },
 };
 
