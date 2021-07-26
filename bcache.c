@@ -227,7 +227,7 @@ int attach_both(char *cdev, char *backdev)
 	int ret;
 	char buf[100];
 
-	ret = detail_dev(backdev, &bd, &cd, &type);
+	ret = detail_dev(backdev, &bd, &cd, NULL, &type);
 	if (ret != 0)
 		return ret;
 	if (type != BCACHE_SB_VERSION_BDEV
@@ -242,7 +242,7 @@ int attach_both(char *cdev, char *backdev)
 	}
 
 	if (strlen(cdev) != 36) {
-		ret = detail_dev(cdev, &bd, &cd, &type);
+		ret = detail_dev(cdev, &bd, &cd, NULL, &type);
 		if (type != BCACHE_SB_VERSION_CDEV
 		    && type != BCACHE_SB_VERSION_CDEV_WITH_UUID) {
 			fprintf(stderr, "%s is not an cache device\n", cdev);
@@ -356,7 +356,7 @@ int main(int argc, char **argv)
 		int type = 1;
 		int ret;
 
-		ret = detail_dev(devname, &bd, &cd, &type);
+		ret = detail_dev(devname, &bd, &cd, NULL, &type);
 		if (ret != 0)
 			return ret;
 		if (type == BCACHE_SB_VERSION_BDEV) {
@@ -401,7 +401,7 @@ int main(int argc, char **argv)
 		int type = 1;
 		int ret;
 
-		ret = detail_dev(devname, &bd, &cd, &type);
+		ret = detail_dev(devname, &bd, &cd, NULL, &type);
 		if (ret != 0) {
 			fprintf(stderr,
 			"This device doesn't exist or failed to receive info from this device\n");
@@ -427,7 +427,7 @@ int main(int argc, char **argv)
 		int type = 5;
 		int ret;
 
-		ret = detail_dev(devname, &bd, &cd, &type);
+		ret = detail_dev(devname, &bd, &cd, NULL, &type);
 		if (ret != 0) {
 			fprintf(stderr,
 		"This device doesn't exist or failed to receive info from this device\n");

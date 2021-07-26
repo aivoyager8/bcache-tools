@@ -43,9 +43,34 @@ struct cdev {
 	unsigned int	replacement;
 };
 
+struct mdev {
+	struct cache_sb		*sb;
+	uint64_t		csum;
+	uint64_t		sb_offset;
+	uint64_t		ns_start;
+	uint64_t		version;
+	char			*magic;
+	char			uuid[40];
+	uint32_t		page_size;
+	uint32_t		total_ns;
+	uint32_t		this_ns;
+	union {
+		char		set_uuid[40];
+		uint64_t	set_magic;
+	};
+	uint64_t		flags;
+	uint64_t		seq;
+	char			bname[40];
+	uint64_t		feature_compat;
+	uint64_t		feature_ro_compat;
+	uint64_t		feature_incompat;
+	uint64_t		pages_offset;
+	uint64_t		pages_total;
+	uint64_t		set_header_offset;
+};
 
 int list_bdevs(struct list_head *head);
-int detail_dev(char *devname, struct bdev *bd, struct cdev *cd, int *type);
+int detail_dev(char *devname, struct bdev *bd, struct cdev *cd, struct mdev *md, int *type);
 int register_dev(char *devname);
 int stop_backdev(char *devname);
 int unregister_cset(char *cset);

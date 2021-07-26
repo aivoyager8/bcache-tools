@@ -148,43 +148,33 @@ int show_bdevs(void)
 	return 0;
 }
 
-int detail_single(char *devname)
+int detail_single_dev(char *devname, struct bdev *bd, struct cdev *cd, int type)
 {
-	struct bdev bd;
-	struct cdev cd;
-	int type = 1;
-	int ret;
-
-	ret = detail_dev(devname, &bd, &cd, &type);
-	if (ret != 0) {
-		fprintf(stderr, "Failed to detail device\n");
-		return ret;
-	}
 	if (type == BCACHE_SB_VERSION_BDEV ||
 	    type == BCACHE_SB_VERSION_BDEV_WITH_OFFSET ||
 	    type == BCACHE_SB_VERSION_BDEV_WITH_FEATURES) {
-		printf("sb.magic\t\t%s\n", bd.base.magic);
+		printf("sb.magic\t\t%s\n", bd->base.magic);
 		printf("sb.first_sector\t\t%" PRIu64 "\n",
-		       bd.base.first_sector);
-		printf("sb.csum\t\t\t%" PRIX64 "\n", bd.base.csum);
-		printf("sb.version\t\t%" PRIu64, bd.base.version);
+		       bd->base.first_sector);
+		printf("sb.csum\t\t\t%" PRIX64 "\n", bd->base.csum);
+		printf("sb.version\t\t%" PRIu64, bd->base.version);
 		printf(" [backing device]\n");
 		putchar('\n');
 		printf("dev.label\t\t");
-		if (*bd.base.label)
-			print_encode(bd.base.label);
+		if (*bd->base.label)
+			print_encode(bd->base.label);
 		else
 			printf("(empty)");
 		putchar('\n');
-		printf("dev.uuid\t\t%s\n", bd.base.uuid);
+		printf("dev.uuid\t\t%s\n", bd->base.uuid);
 		printf("dev.sectors_per_block\t%u\n"
 		       "dev.sectors_per_bucket\t%u\n",
-		       bd.base.sectors_per_block,
-		       bd.base.sectors_per_bucket);
+		       bd->base.sectors_per_block,
+		       bd->base.sectors_per_bucket);
 		printf("dev.data.first_sector\t%u\n"
 		       "dev.data.cache_mode\t%d",
-		       bd.first_sector, bd.cache_mode);
-		switch (bd.cache_mode) {
+		       bd->first_sector, bd->cache_mode);
+		switch (bd->cache_mode) {
 		case CACHE_MODE_WRITETHROUGH:
 			printf(" [writethrough]\n");
 			break;
@@ -200,8 +190,8 @@ int detail_single(char *devname)
 		default:
 			putchar('\n');
 		}
-		printf("dev.data.cache_state\t%u", bd.cache_state);
-		switch (bd.cache_state) {
+		printf("dev.data.cache_state\t%u", bd->cache_state);
+		switch (bd->cache_state) {
 		case BDEV_STATE_NONE:
 			printf(" [detached]\n");
 			break;
@@ -219,29 +209,29 @@ int detail_single(char *devname)
 		}
 
 		putchar('\n');
-		printf("cset.uuid\t\t%s\n", bd.base.cset);
+		printf("cset.uuid\t\t%s\n", bd->base.cset);
 	} else if (type == BCACHE_SB_VERSION_CDEV ||
 		   type == BCACHE_SB_VERSION_CDEV_WITH_UUID ||
 		   type == BCACHE_SB_VERSION_CDEV_WITH_FEATURES) {
-		printf("sb.magic\t\t%s\n", cd.base.magic);
+		printf("sb.magic\t\t%s\n", cd->base.magic);
 		printf("sb.first_sector\t\t%" PRIu64 "\n",
-		       cd.base.first_sector);
-		printf("sb.csum\t\t\t%" PRIX64 "\n", cd.base.csum);
-		printf("sb.version\t\t%" PRIu64, cd.base.version);
+		       cd->base.first_sector);
+		printf("sb.csum\t\t\t%" PRIX64 "\n", cd->base.csum);
+		printf("sb.version\t\t%" PRIu64, cd->base.version);
 		printf(" [cache device]\n");
-		print_cache_set_supported_feature_sets(&cd.base.sb);
+		print_cache_set_supported_feature_sets(&cd->base.sb);
 		putchar('\n');
 		printf("dev.label\t\t");
-		if (*cd.base.label)
-			print_encode(cd.base.label);
+		if (*cd->base.label)
+			print_encode(cd->base.label);
 		else
 			printf("(empty)");
 		putchar('\n');
-		printf("dev.uuid\t\t%s\n", cd.base.uuid);
+		printf("dev.uuid\t\t%s\n", cd->base.uuid);
 		printf("dev.sectors_per_block\t%u\n"
 		       "dev.sectors_per_bucket\t%u\n",
-		       cd.base.sectors_per_block,
-		       cd.base.sectors_per_bucket);
+		       cd->base.sectors_per_block,
+		       cd->base.sectors_per_bucket);
 		printf("dev.cache.first_sector\t%u\n"
 		       "dev.cache.cache_sectors\t%ju\n"
 		       "dev.cache.total_sectors\t%ju\n"
@@ -249,12 +239,12 @@ int detail_single(char *devname)
 		       "dev.cache.discard\t%s\n"
 		       "dev.cache.pos\t\t%u\n"
 		       "dev.cache.replacement\t%d",
-		       cd.first_sector,
-		       cd.cache_sectors,
-		       cd.total_sectors,
-		       cd.ordered ? "yes" : "no",
-		       cd.discard ? "yes" : "no", cd.pos, cd.replacement);
-		switch (cd.replacement) {
+		       cd->first_sector,
+		       cd->cache_sectors,
+		       cd->total_sectors,
+		       cd->ordered ? "yes" : "no",
+		       cd->discard ? "yes" : "no", cd->pos, cd->replacement);
+		switch (cd->replacement) {
 		case CACHE_REPLACEMENT_LRU:
 			printf(" [lru]\n");
 			break;
@@ -269,9 +259,73 @@ int detail_single(char *devname)
 		}
 
 		putchar('\n');
-		printf("cset.uuid\t\t%s\n", cd.base.cset);
+		printf("cset.uuid\t\t%s\n", cd->base.cset);
 	} else {
 		return 1;
 	}
 	return 0;
+}
+
+int detail_single_mdev(char *devname, struct mdev *md)
+{
+	printf(	"sb.csum\t\t\t%" PRIX64 "\n"
+		"sb.sb_offset\t\t0x%" PRIX64 "\n"
+		"sb.ns_start\t\t0x%" PRIX64 "\n"
+		"sb.version\t\t%" PRIu64 " [nvdimm-meta device]\n"
+		"sb.magic\t\t%s\n"
+		"sb.uuid\t\t\t%s\n"
+		"sb.page_size\t\t%u\n"
+		"sb.total_ns\t\t%u\n"
+		"sb.this_ns\t\t%u\n"
+		"sb.set_uuid\t\t%s\n"
+		"sb.flags\t\t%" PRIX64 "\n"
+		"sb.seq\t\t\t%" PRIX64 "\n"
+		"sb.feature_compat\t0x%" PRIX64 "\n"
+		"sb.feature_ro_compat\t0x%" PRIX64 "\n"
+		"sb.feature_incompat\t0x%" PRIX64 "\n"
+		"sb.pages_offset\t\t0x%" PRIX64 "\n"
+		"sb.pages_total\t\t%" PRIu64 "\n"
+		"sb.set_header_offset\t%" PRIu64 "\n",
+		md->csum,
+		md->sb_offset,
+		md->ns_start,
+		md->version,
+		md->magic,
+		md->uuid,
+		md->page_size,
+		md->total_ns,
+		md->this_ns,
+		md->set_uuid,
+		md->flags,
+		md->seq,
+		md->feature_compat,
+		md->feature_ro_compat,
+		md->feature_incompat,
+		md->pages_offset,
+		md->pages_total,
+		md->set_header_offset);
+	putchar('\n');
+
+	return 0;
+}
+
+int detail_single(char *devname)
+{
+	struct bdev bd;
+	struct cdev cd;
+	struct mdev md;
+	int type = 0;
+	int ret = 0;
+
+	ret = detail_dev(devname, &bd, &cd, &md, &type);
+	if (ret != 0)
+		goto out;
+
+	if (type >= 0 && type <= BCACHE_SB_MAX_VERSION)
+		ret = detail_single_dev(devname, &bd, &cd, type);
+	else
+		ret = detail_single_mdev(devname, &md);
+
+out:
+	return ret;
 }

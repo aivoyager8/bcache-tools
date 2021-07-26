@@ -13,10 +13,14 @@
 #include <string.h>
 #include <malloc.h>
 #include <regex.h>
+#include <libgen.h>
 
 #include "bcache.h"
+#include "nvmpg_format.h"
 #include "lib.h"
 #include "bitwise.h"
+
+
 /*
  * utils function
  */
@@ -540,10 +544,61 @@ Fail:
 	return 1;
 }
 
-int detail_dev(char *devname, struct bdev *bd, struct cdev *cd, int *type)
+int __detail_mdev(char *devname, struct bch_nvmpg_sb *nvm_sb, struct mdev *md)
+{
+	uint64_t expected_csum;
+	int ret = 1;
+
+	if (memcmp(nvm_sb->magic, bch_nvmpg_magic, 16)) {
+		fprintf(stderr,
+			"Bad magic, make sure this is an bcache nvdimm meta device\n");
+		goto out;
+	}
+
+	if (nvm_sb->sb_offset != BCH_NVMPG_SB_OFFSET) {
+		fprintf(stderr, "Invalid superblock (bad sector)\n");
+		goto out;
+	}
+
+	expected_csum = csum_set(nvm_sb);
+	if (expected_csum != nvm_sb->csum) {
+		fprintf(stderr, "Csum is not match with expected one\n");
+		goto out;
+	}
+
+	memset(md, 0, sizeof(struct mdev));
+
+	md->magic		= "ok";
+	md->csum		= nvm_sb->csum;
+	md->ns_start		= nvm_sb->ns_start;
+	md->sb_offset		= nvm_sb->sb_offset;
+	md->version		= nvm_sb->version;
+	uuid_unparse(nvm_sb->uuid, md->uuid);
+	md->page_size		= nvm_sb->page_size;
+	md->total_ns		= nvm_sb->total_ns;
+	md->this_ns		= nvm_sb->this_ns;
+	uuid_unparse(nvm_sb->set_uuid, md->set_uuid);
+	md->flags		= nvm_sb->flags;
+	md->seq			= nvm_sb->seq;
+	strncpy(md->bname,	basename(devname), 40);
+	md->feature_compat	= nvm_sb->feature_compat;
+	md->feature_ro_compat	= nvm_sb->feature_ro_compat;
+	md->feature_incompat	= nvm_sb->feature_incompat;
+	md->pages_offset	= nvm_sb->pages_offset;
+	md->pages_total		= nvm_sb->pages_total;
+	md->set_header_offset	= nvm_sb->set_header_offset;
+
+	ret = 0;
+out:
+	return ret;
+}
+
+int detail_dev(char *devname, struct bdev *bd, struct cdev *cd,
+	       struct mdev *md, int *type)
 {
 	char *buf = NULL;
 	struct cache_sb_disk *sb_disk = NULL;
+	struct bch_nvmpg_sb *nvm_sb = NULL;
 	int buf_size = 16<<10, ret = 1;
 	int fd;
 
@@ -569,6 +624,14 @@ int detail_dev(char *devname, struct bdev *bd, struct cdev *cd, int *type)
 	sb_disk = (struct cache_sb_disk *)(buf + SB_START);
 	if (!memcmp(sb_disk->magic, bcache_magic, 16)) {
 		ret = __detail_dev(devname, sb_disk, bd, cd, type);
+		goto out_memory;
+	}
+
+	/* Try whether it is nvm_pages super block */
+	nvm_sb = (struct bch_nvmpg_sb *)(buf + BCH_NVMPG_SB_OFFSET);
+	if (!memcmp(nvm_sb->magic, bch_nvmpg_magic, 16)) {
+		ret = __detail_mdev(devname, nvm_sb, md);
+		*type = -1;
 		goto out_memory;
 	}
 

@@ -269,7 +269,7 @@ static void write_sb(char *dev, struct sb_context *sbc, bool bdev, bool force)
 			int type = 1;
 			int ret;
 
-			ret = detail_dev(dev, &bd, &cd, &type);
+			ret = detail_dev(dev, &bd, &cd, NULL, &type);
 			if (ret != 0)
 				exit(EXIT_FAILURE);
 			if (type == BCACHE_SB_VERSION_BDEV) {
